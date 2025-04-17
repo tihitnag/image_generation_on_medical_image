@@ -22,10 +22,10 @@ class Train:
         self.nz = 512
         self.nlr = 0.0002
         self.nbeta1 = 0.5
-        self.use_cuda = False  # Force CPU usage
-        self.multi_gpu = False  # Disable multi-GPU
-        self.dataloader_workers = 0  # Reduce workers for CPU
-        self.device = torch.device("cpu")  # Always use CPU
+        self.use_cuda = torch.cuda.is_available()
+        self.multi_gpu = False
+        self.dataloader_workers = args.num_workers
+        self.device = torch.device(args.device)
 
         self.__init_models()
         self.metrics = {}
@@ -57,8 +57,8 @@ class Train:
         self.netD = Discriminator(ndf=self.ndf, im_size=self.im_size)
         self.netD.apply(weights_init)
 
-        # Initialize LPIPS with CPU
-        self.percept = lpips.PerceptualLoss(model='net-lin', net='vgg', use_gpu=False)
+        # Initialize LPIPS with GPU if available
+        self.percept = lpips.PerceptualLoss(model='net-lin', net='vgg', use_gpu=self.use_cuda)
         
         self.netG.to(self.device)
         self.netD.to(self.device)
@@ -82,18 +82,33 @@ class Train:
         print("Gen. Device:", next(self.netG.parameters()).device)
 
     def __load_checkpoint(self):
-#         if multi_gpu:
+        try:
+            print(f"Attempting to load checkpoint from: {self.checkpoint}")
+            ckpt = torch.load(self.checkpoint, map_location=self.device, weights_only=True)
             
-        ckpt = torch.load(self.checkpoint)
-        self.netG.load_state_dict({k.replace('module.', ''): v for k, v in ckpt['g'].items()})
-        self.netD.load_state_dict({k.replace('module.', ''): v for k, v in ckpt['d'].items()})
-        self.avg_param_G = ckpt['g_ema']
-        self.optimizerG.load_state_dict(ckpt['opt_g'])
-        self.optimizerD.load_state_dict(ckpt['opt_d'])
-#         self.netG.to(self.device)
-#         self.netD.to(self.device)
-        self.current_iteration = int(self.checkpoint.split('_')[-1].split('.')[0])
-        del ckpt
+            # Verify the checkpoint contains all required keys
+            required_keys = ['g', 'd', 'g_ema', 'opt_g', 'opt_d']
+            if not all(key in ckpt for key in required_keys):
+                raise ValueError("Checkpoint missing required keys")
+                
+            self.netG.load_state_dict({k.replace('module.', ''): v for k, v in ckpt['g'].items()})
+            self.netD.load_state_dict({k.replace('module.', ''): v for k, v in ckpt['d'].items()})
+            self.avg_param_G = ckpt['g_ema']
+            self.optimizerG.load_state_dict(ckpt['opt_g'])
+            self.optimizerD.load_state_dict(ckpt['opt_d'])
+            
+            # Try to extract iteration number from filename
+            try:
+                self.current_iteration = int(self.checkpoint.split('_')[-1].split('.')[0])
+                print(f"Successfully loaded checkpoint from iteration {self.current_iteration}")
+            except:
+                print("Could not determine iteration number from checkpoint filename")
+                self.current_iteration = 0
+                
+        except Exception as e:
+            print(f"Error loading checkpoint: {str(e)}")
+            print("Starting from scratch...")
+            self.current_iteration = 0
 
     def train_d(self, data, label="real"):
         if label == "real":
@@ -149,18 +164,30 @@ class Train:
         else:
             dataset = IndividualKLGradeImageFolder(self.image_set, self.kl_grade, transforms=self.transforms)
 
-        dataloader = get_dataloader(dataset, batch_size=self.batch_size)
+        dataloader = get_dataloader(dataset, batch_size=self.batch_size, dataloader_workers=self.dataloader_workers)
 
         fixed_noise = torch.FloatTensor(8, self.nz).normal_(0, 1).to(self.device)
+
+        print(f"\nStarting training for {self.total_iterations} iterations")
+        print(f"Batch size: {self.batch_size}")
+        print(f"Image size: {self.im_size}")
+        print(f"Using device: {self.device}")
+        print(f"Number of training images: {len(dataset)}")
+        print(f"Checkpoints will be saved every {self.save_interval} iterations\n")
 
         for iteration in tqdm(range(self.current_iteration, self.total_iterations + 1)):
             real_image, rec_img_all, rec_img_small, rec_img_part = self.one_iter(dataloader)
 
-            if iteration % (self.save_interval * 10) == 0:
+            # Save progress more frequently
+            if iteration % self.save_interval == 0:
+                print(f"\nSaving checkpoint at iteration {iteration}")
                 save_iter_image(iteration, self.saved_image_folder, self.netG, self.avg_param_G,
                                 fixed_noise, real_image, rec_img_all, rec_img_small, rec_img_part)
-
-            if iteration % (self.save_interval * 10) == 0 or iteration == self.total_iterations:
                 save_model(iteration, self.saved_model_folder, self.netG, self.netD, self.avg_param_G,
                            self.optimizerG, self.optimizerD)
+
+        # Save final model
+        print("\nTraining complete! Saving final model...")
+        save_model(self.total_iterations, self.saved_model_folder, self.netG, self.netD, self.avg_param_G,
+                   self.optimizerG, self.optimizerD)
 

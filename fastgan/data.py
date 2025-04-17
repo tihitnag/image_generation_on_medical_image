@@ -69,8 +69,13 @@ class ImageFolder(data.Dataset):
 class IndividualKLGradeImageFolder(ImageFolder):
     def __init__(self, image_set, kl_grade, transforms=None):
         super().__init__(image_set, transforms)
-        print(f"Restricted Domain to KL Grade {kl_grade}.")
+        print(f"Restricted Domain to {kl_grade} images.")
         print(f"Original size: {len(self.image_files)}")
-        self.image_files = [img for img in self.image_files if str(kl_grade) in img]
+        if kl_grade == "normal":
+            self.image_files = [img for img in self.image_files if "normal" in img]
+        elif kl_grade == "abnormal":
+            self.image_files = [img for img in self.image_files if "abnormal" in img]
+        else:
+            raise ValueError(f"Invalid grade: {kl_grade}. Must be 'normal' or 'abnormal'")
         print(f"New size: {len(self.image_files)}")
 

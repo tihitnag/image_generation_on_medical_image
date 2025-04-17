@@ -62,12 +62,33 @@ def save_iter_image(iteration, saved_image_folder, netG, avg_param_G, fixed_nois
 
 
 def save_model(iteration, saved_model_folder, netG, netD, avg_param_G, optimizerG, optimizerD):
-    backup_para = copy_G_params(netG)
-    load_params(netG, avg_param_G)
-    torch.save({'g': netG.state_dict(), 'd': netD.state_dict()}, saved_model_folder + '/%d.pth' % iteration)
-    load_params(netG, backup_para)
-    torch.save({'g': netG.state_dict(),
+    try:
+        # Ensure the directory exists
+        os.makedirs(saved_model_folder, exist_ok=True)
+        
+        # Save the model with error handling
+        try:
+            torch.save({
+                'g': netG.state_dict(),
                 'd': netD.state_dict(),
                 'g_ema': avg_param_G,
                 'opt_g': optimizerG.state_dict(),
-                'opt_d': optimizerD.state_dict()}, saved_model_folder + '/all_%d.pth' % iteration)
+                'opt_d': optimizerD.state_dict()
+            }, os.path.join(saved_model_folder, f'all_{iteration}.pth'))
+            print(f"Successfully saved model checkpoint at iteration {iteration}")
+        except Exception as e:
+            print(f"Error saving model checkpoint: {str(e)}")
+            # Try saving to a different location if the first attempt fails
+            backup_path = os.path.join(os.path.dirname(saved_model_folder), 'backup_models')
+            os.makedirs(backup_path, exist_ok=True)
+            torch.save({
+                'g': netG.state_dict(),
+                'd': netD.state_dict(),
+                'g_ema': avg_param_G,
+                'opt_g': optimizerG.state_dict(),
+                'opt_d': optimizerD.state_dict()
+            }, os.path.join(backup_path, f'all_{iteration}.pth'))
+            print(f"Saved backup checkpoint to {backup_path}")
+    except Exception as e:
+        print(f"Critical error saving model: {str(e)}")
+        print("Training will continue but checkpoints may not be saved")
